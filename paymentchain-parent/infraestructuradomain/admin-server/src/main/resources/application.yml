@@ -1,0 +1,30 @@
+## YAML Template.
+--- #self configuration
+server:
+  port: 8762
+spring:
+  application:
+    name: admin-server
+--- #configuration for eureka client
+eureka:
+  instance:
+    health-check-url-path: /actuator/health
+    metadata-map:
+      startup: ${random.int}    #needed to trigger info and endpoint update after restart
+    lease-expiration-duration-in-seconds: 10
+  client:
+    registry-fetch-interval-seconds: 5
+    service-url:
+      defaultZone: ${EUREKA_SERVER:http://localhost:8761/eureka}
+--- #As with Spring Boot 2 most of the endpoints aren?t exposed via http by default, we expose all of them. For production you should carefully choose which endpoints to expose
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  endpoint:
+    health:
+      show-details: ALWAYS
+  info:
+    env:
+      enabled: true
