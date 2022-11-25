@@ -3,6 +3,7 @@ package com.tio.leo.paymentchain.products.controller;
 import com.tio.leo.paymentchain.products.entitys.Product;
 import com.tio.leo.paymentchain.products.repository.IProductRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,11 +23,16 @@ import java.util.List;
 @RequestMapping("/product")
 public class ProductController {
 
+
+    @Value("{user.role}")
+    private String role;
+
     @Autowired
     private IProductRepository productRepository;
 
     @GetMapping("/all")
     public List<Product> list() {
+        System.out.println("El rol es: " + role);
         return productRepository.findAll();
     }
 
