@@ -12,6 +12,7 @@ spring:
     name: businessdomain-customer
   cloud:
     config:
+      #uri: ${CONFIG_SERVER:http://localhost:8888/}
       discovery:
         enabled: true
         service-id: config-server
