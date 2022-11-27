@@ -3,13 +3,18 @@ package com.tio.leo.paymentchain.customer.controller;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.tio.leo.paymentchain.customer.entitys.Customer;
 import com.tio.leo.paymentchain.customer.entitys.CustomerProduct;
+import com.tio.leo.paymentchain.customer.exception.BusinessRuleException;
 import com.tio.leo.paymentchain.customer.repository.ICustomerRepository;
+import com.tio.leo.paymentchain.customer.service.BusinessTransactionTwoService;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.epoll.EpollChannelOption;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.handler.timeout.WriteTimeoutHandler;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -25,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.netty.http.client.HttpClient;
 
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -36,83 +42,56 @@ public class CustomerController {
 
     @Autowired
     private ICustomerRepository customerRepository;
+    
+    @Autowired
+    private BusinessTransactionTwoService businessTransactionTwoService;
 
-//    @Autowired
-//    private WebClient webClient;
-
-    private final WebClient.Builder webClientBuilder;
+    @Value("${user.role}")
+    private String role;
 
     /**
      * Constructor.
      */
-    public CustomerController(WebClient.Builder webClientBuilder) {
-        this.webClientBuilder = webClientBuilder;
+    public CustomerController() {
     }
-
-    HttpClient httpClient = HttpClient
-            .create()
-            //Connection Timeout: is a period within which a connection between a client and a server must be established
-            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
-            .option(ChannelOption.SO_KEEPALIVE, true)
-            .option(EpollChannelOption.TCP_KEEPIDLE, 300)
-            .option(EpollChannelOption.TCP_KEEPINTVL, 60)
-            //Response Timeout: The maximun time we wait to receive a response after sending a request
-            .responseTimeout(Duration.ofSeconds(1))
-            // Read and Write Timeout: A read timeout occurs when no data was read within a certain
-            //period of time, while the write timeout when a write operation cannot finish at a specific time
-            .doOnConnected(connection -> {
-                connection.addHandlerLast(new ReadTimeoutHandler(5000, TimeUnit.MILLISECONDS));
-                connection.addHandlerLast(new WriteTimeoutHandler(5000, TimeUnit.MILLISECONDS));
-            });
-
+    
     @GetMapping("/full")
     public Customer get(@RequestParam String code) {
         Customer customer = customerRepository.findByCode(code);
         List<CustomerProduct> products = customer.getProductList();
         products.forEach(item -> {
-            String productName = getNameProduct(item.getProductId());
+            String productName = "";
+            try {
+                productName = businessTransactionTwoService.getNameProduct(item.getProductId());
+            } catch (UnknownHostException e) {
+                throw new RuntimeException(e);
+            }
             item.setProductName(productName);
         });
-        customer.setTransactions(getTransactions(customer.getIban()));
+        customer.setTransactions(businessTransactionTwoService.getTransactions(customer.getIban()));
         return customer;
     }
 
-    private String getNameProduct(Long id){
-        WebClient webClient = webClientBuilder.clientConnector(new ReactorClientHttpConnector(httpClient.wiretap(true)))
-                .baseUrl("http://localhost:8082/paymentProduct")
-                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .defaultUriVariables(Collections.singletonMap("url", "http://localhost:8082/paymentProduct"))
-                .build();
-
-        JsonNode product = webClient.get()
-                .uri("/product/" + id)
-                .retrieve()
-                .bodyToMono(JsonNode.class).block();
-        return product.get("name").asText();
-    }
-
-    private <T> List<T> getTransactions(String idBan) {
-        WebClient webClient = webClientBuilder.clientConnector(new ReactorClientHttpConnector(httpClient.wiretap(true)))
-                .baseUrl("http://localhost:8083/paymentTransaction")
-                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .defaultUriVariables(Collections.singletonMap("url", "http://localhost:8083/paymentTransaction"))
-                .build();
-
-        List<Object> listTransactions = webClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/transaction/transactionsByIbaAccount").queryParam("ibanAccount", idBan).build())
-                .retrieve()
-                .bodyToFlux(Object.class).collectList().block();
-        return (List<T>) listTransactions;
-    }
-
     @GetMapping("/all")
-    public List<Customer> list() {
-        return customerRepository.findAll();
+    public ResponseEntity<List<Customer>> list() {
+        List<Customer> findAll = customerRepository.findAll();
+        if (findAll.isEmpty()) {
+            return ResponseEntity.noContent().build();
+        } else {
+            return ResponseEntity.ok(findAll);
+        }
+    }
+
+    @GetMapping("/hello")
+    public String sayHello() {
+        return "Hello your role is: " + role;
     }
 
     @GetMapping("/{id}")
-    public Customer get(@PathVariable long id) {
-        return customerRepository.findById(id).get();
+    public ResponseEntity<Customer> get(@PathVariable long id) {
+        return customerRepository.findById(id)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @PutMapping("/{id}")
@@ -121,9 +100,18 @@ public class CustomerController {
     }
 
     @PostMapping
-    public ResponseEntity<?> post(@RequestBody Customer input) {
-        //input.getProductList().forEach(x -> x.setCustomer(input));
-        return ResponseEntity.ok(customerRepository.save(input));
+    public ResponseEntity<?> post(@RequestBody Customer input) throws UnknownHostException, BusinessRuleException{
+        if (input.getProductList() != null) {
+            for (CustomerProduct product : input.getProductList()) {
+                String productName = businessTransactionTwoService.getNameProduct(product.getId());
+                if (StringUtils.isBlank(productName)) {
+                    throw new BusinessRuleException("1025", "Error de validacion, producto no existe", HttpStatus.PRECONDITION_FAILED);
+                } else {
+                    product.setCustomer(input);
+                }
+            }
+        }
+        return new ResponseEntity<>(customerRepository.save(input), HttpStatus.CREATED);
     }
 
     @DeleteMapping("/{id}")
